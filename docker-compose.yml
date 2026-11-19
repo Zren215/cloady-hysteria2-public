@@ -1,0 +1,54 @@
+services:
+  hysteria2:
+    image: alpine:3.20
+    restart: unless-stopped
+    ports:
+      - "443:443/udp"
+    volumes:
+      - hysteria-data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 1G
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache openssl curl ca-certificates
+        mkdir -p /data /etc/hysteria
+        if [ -f /data/password ]; then
+          PASS=$$(cat /data/password)
+        else
+          PASS=$$(openssl rand -hex 16)
+          printf '%s' "$$PASS" > /data/password
+        fi
+        echo "HYSTERIA2_PASSWORD=$$PASS"
+        ARCH=$$(uname -m)
+        case "$$ARCH" in
+          x86_64) HARCH=amd64 ;;
+          aarch64) HARCH=arm64 ;;
+          *) echo "unsupported arch: $$ARCH"; exit 1 ;;
+        esac
+        curl -fsSL -o /usr/local/bin/hysteria "https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-$${HARCH}"
+        chmod +x /usr/local/bin/hysteria
+        openssl req -x509 -newkey rsa:2048 -keyout /etc/hysteria/key.pem -out /etc/hysteria/cert.pem -days 3650 -nodes -subj "/CN=www.bing.com" -addext "subjectAltName=DNS:www.bing.com"
+        cat > /etc/hysteria/config.yaml <<EOF
+        listen: :443
+        tls:
+          cert: /etc/hysteria/cert.pem
+          key: /etc/hysteria/key.pem
+        auth:
+          type: password
+          password: $$PASS
+        masquerade:
+          type: proxy
+          proxy:
+            url: https://www.bing.com
+            rewriteHost: true
+        EOF
+        echo "Starting hysteria2 server on UDP :443 (SNI www.bing.com)"
+        exec /usr/local/bin/hysteria server -c /etc/hysteria/config.yaml
+volumes:
+  hysteria-data:
